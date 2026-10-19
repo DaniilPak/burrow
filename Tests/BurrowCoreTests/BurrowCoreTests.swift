@@ -265,4 +265,47 @@ private extension URL {
         try Data().write(to: self)
         return self
     }
+
+    // MARK: Windows under QEMU
+
+    func testToolsDisplayKeepsEvenSaneDimensions() {
+        let display = BurrowTools.Display(width: 3025, height: 1901, scalePercent: 200)
+        XCTAssertEqual(display.width, 3024)
+        XCTAssertEqual(display.height, 1900)
+        let tiny = BurrowTools.Display(width: 10, height: 10, scalePercent: 100)
+        XCTAssertEqual(tiny.width, 1024)
+        XCTAssertEqual(tiny.height, 768)
+    }
+
+    func testAnswerFileInstallsBurrowToolsAtFirstSignIn() {
+        let xml = WindowsSetupMedia.answerFile()
+        XCTAssertTrue(xml.contains("burrow-install.cmd"))
+        XCTAssertTrue(xml.contains("<Order>2</Order>"))
+    }
+
+    func testToolsDiscCarriesDisplayAndHelper() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("burrow-tools-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disc = directory.appendingPathComponent("burrow-tools.iso")
+        try BurrowTools.create(at: disc, display: .init(width: 3024, height: 1900, scalePercent: 200))
+        XCTAssertTrue(ImageCatalog.looksLikeDiscImage(disc))
+        let contents = try Data(contentsOf: disc)
+        XCTAssertNotNil(contents.range(of: Data("3024 1900 200".utf8)))
+        XCTAssertNotNil(contents.range(of: Data("BurrowDisplay".utf8)))
+    }
+
+    func testQEMUReplacesAnEmptyASIFDiskWithRaw() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("burrow-qemu-test-\(UUID().uuidString).burrow")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = MachineBundle(url: directory)
+        var config = MachineConfig(name: "Q", guest: .windows, diskBytes: 1 << 30, diskFileName: "disk.asif", macAddress: "02:00:00:00:00:01")
+        FileManager.default.createFile(atPath: bundle.diskURL(for: config).path, contents: Data())
+        try bundle.saveConfig(config)
+        try QEMUMachine.prepareDisk(bundle, config: &config)
+        XCTAssertEqual(config.diskFileName, "disk.img")
+        XCTAssertEqual(try DiskImage.logicalSize(of: bundle.diskURL(for: config)), 1 << 30)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("disk.asif").path))
+    }
 }
