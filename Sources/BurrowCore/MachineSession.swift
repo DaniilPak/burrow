@@ -283,7 +283,7 @@ public final class MachineSession: NSObject, ObservableObject {
         // Starting usually opens the machine's window in the same breath; let it appear so the
         // display can be sized for the screen it lands on.
         try? await Task.sleep(for: .milliseconds(400))
-        let display = Self.preferredWindowsDisplay?(config.name) ?? .fallback
+        let display = Self.preferredWindowsDisplay?(config.name, config.windowsDisplayMode ?? .sharp) ?? .fallback
         try await Task.detached { try machine.start(installing: attachInstaller && installing, display: display) }.value
         qemuMachine = machine
         bootedAt = Date()
@@ -322,7 +322,7 @@ public final class MachineSession: NSObject, ObservableObject {
     }
 
     /// The app supplies the screen the named machine's window is on; headless runs use the fallback.
-    nonisolated(unsafe) public static var preferredWindowsDisplay: ((String) -> BurrowTools.Display)?
+    nonisolated(unsafe) public static var preferredWindowsDisplay: ((_ machine: String, _ mode: WindowsDisplayMode) -> BurrowTools.Display)?
 
     private func qemuEvent(_ event: QEMUMachine.Event, from machine: QEMUMachine) {
         guard qemuMachine === machine || qemuMachine == nil else { return }

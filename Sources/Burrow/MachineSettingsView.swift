@@ -34,9 +34,12 @@ struct MachineSettingsView: View {
                     LabeledSlider(title: "Disk", value: $diskGiB, range: originalDiskGiB...max(originalDiskGiB, 2048), unit: "GB")
                     Text("Disks can grow but not shrink. Grow the partition inside the guest afterwards.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Picker("Display", selection: resolution) {
-                        ForEach(Self.resolutions, id: \.self) { size in
-                            Text(verbatim: "\(size.width) × \(size.height)").tag(size)
+                    // Windows follows the Mac's screen by itself (Burrow Tools), so it has no fixed size.
+                    if draft.guest != .windows {
+                        Picker("Display", selection: resolution) {
+                            ForEach(Self.resolutions, id: \.self) { size in
+                                Text(verbatim: "\(size.width) × \(size.height)").tag(size)
+                            }
                         }
                     }
                 }
@@ -66,6 +69,18 @@ struct MachineSettingsView: View {
                     Section("Windows") {
                         DiscRow(title: "Installer disc", path: $draft.installerImagePath, kinds: ["iso"])
                         DiscRow(title: "Driver disc (virtio-win)", path: $draft.driversImagePath, kinds: ["iso"])
+                        Picker("Display", selection: Binding(
+                            get: { draft.windowsDisplayMode ?? .sharp },
+                            set: { draft.windowsDisplayMode = $0 == .sharp ? nil : $0 }
+                        )) {
+                            ForEach(WindowsDisplayMode.allCases, id: \.self) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Text("\((draft.windowsDisplayMode ?? .sharp).summary) Takes effect the next time Windows starts.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Text("Eject the installer once Windows is installed. Keep the driver disc until the first sign-in has installed the drivers.")
                             .font(.caption).foregroundStyle(.secondary)
                     }

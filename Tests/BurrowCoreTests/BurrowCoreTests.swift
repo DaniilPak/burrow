@@ -265,12 +265,17 @@ private extension URL {
         try Data().write(to: self)
         return self
     }
+}
 
+extension BurrowCoreTests {
     // MARK: Windows under QEMU
 
     func testToolsDisplayKeepsEvenSaneDimensions() {
         let display = BurrowTools.Display(width: 3025, height: 1901, scalePercent: 200)
         XCTAssertEqual(display.width, 3024)
+        let half = BurrowTools.Display(width: 1512, height: 950, scalePercent: 100)
+        XCTAssertEqual(half.width, 1504)
+        XCTAssertEqual(half.height, 944) // 1504 × 945 keeps the shape; heights stay even
         XCTAssertEqual(display.height, 1900)
         let tiny = BurrowTools.Display(width: 10, height: 10, scalePercent: 100)
         XCTAssertEqual(tiny.width, 1024)
@@ -291,8 +296,43 @@ private extension URL {
         try BurrowTools.create(at: disc, display: .init(width: 3024, height: 1900, scalePercent: 200))
         XCTAssertTrue(ImageCatalog.looksLikeDiscImage(disc))
         let contents = try Data(contentsOf: disc)
-        XCTAssertNotNil(contents.range(of: Data("3024 1900 200".utf8)))
+        XCTAssertNotNil(contents.range(of: Data("3024 1900 200 0".utf8)))
         XCTAssertNotNil(contents.range(of: Data("BurrowDisplay".utf8)))
+    }
+
+    func testPerformanceModeReachesTheToolsDisc() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("burrow-tools-perf-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disc = directory.appendingPathComponent("burrow-tools.iso")
+        try BurrowTools.create(at: disc, display: .init(width: 1512, height: 950, scalePercent: 100, performance: true))
+        let contents = try Data(contentsOf: disc)
+        XCTAssertNotNil(contents.range(of: Data("1504 944 100 1".utf8)))
+        XCTAssertNotNil(contents.range(of: Data("SetEffects".utf8)))
+    }
+
+    func testOlderConfigsDecodeWithoutDisplayMode() throws {
+        var config = MachineConfig(name: "W", guest: .windows, macAddress: "02:00:00:00:00:02")
+        config.windowsDisplayMode = .balanced
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as! [String: Any]
+        XCTAssertEqual(json["windowsDisplayMode"] as? String, "balanced")
+        json["windowsDisplayMode"] = nil
+        let decoded = try JSONDecoder().decode(MachineConfig.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(decoded.windowsDisplayMode)
+    }
+
+    func testDisplayModesOnRetinaAndPlainScreens() {
+        XCTAssertEqual(WindowsDisplayMode.sharp.pixelsPerPoint(screenScale: 2), 2)
+        XCTAssertEqual(WindowsDisplayMode.balanced.pixelsPerPoint(screenScale: 2), 1.5)
+        XCTAssertEqual(WindowsDisplayMode.fast.pixelsPerPoint(screenScale: 2), 1)
+        // A 1x monitor has nothing to trade: every mode draws one pixel per point.
+        XCTAssertEqual(WindowsDisplayMode.balanced.pixelsPerPoint(screenScale: 1), 1)
+        XCTAssertFalse(WindowsDisplayMode.sharp.turnsOffEffects)
+        XCTAssertTrue(WindowsDisplayMode.balanced.turnsOffEffects)
+        // Balanced on a 14" MacBook below the notch: 1512×950 points → 2268 rounds to 2256.
+        let balanced = BurrowTools.Display(width: 2268, height: 1425, scalePercent: 150)
+        XCTAssertEqual(balanced.width, 2256)
+        XCTAssertEqual(balanced.height, 1416)
     }
 
     func testQEMUReplacesAnEmptyASIFDiskWithRaw() throws {

@@ -63,15 +63,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         DisplayPreference.shared.start()
         // Windows starts at the native resolution and scaling of the screen it opens on.
-        MachineSession.preferredWindowsDisplay = { name in
+        MachineSession.preferredWindowsDisplay = { name, mode in
             // The machine's own window decides; otherwise the window in front, then the main screen.
             let window = NSApp.windows.first { $0.isVisible && $0.title == name } ?? NSApp.keyWindow
             guard let screen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return .fallback }
-            let scale = screen.backingScaleFactor
+            let scale = mode.pixelsPerPoint(screenScale: screen.backingScaleFactor)
             // Full screen on a MacBook with a notch only uses the area below it, so match that.
             let height = screen.frame.height - screen.safeAreaInsets.top
             return BurrowTools.Display(width: Int(screen.frame.width * scale), height: Int(height * scale),
-                                       scalePercent: Int((scale * 100).rounded()))
+                                       scalePercent: Int((scale * 100).rounded()), performance: mode.turnsOffEffects)
         }
     }
 

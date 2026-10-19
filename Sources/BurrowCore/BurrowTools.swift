@@ -16,12 +16,22 @@ public enum BurrowTools {
         public var width: Int
         public var height: Int
         public var scalePercent: Int
+        /// Performance mode: Burrow Tools also turns off Windows' animations, transparency
+        /// and other effects that cost a lot when every pixel is drawn by the CPU.
+        public var performance: Bool
 
-        public init(width: Int, height: Int, scalePercent: Int) {
-            // virtio-gpu wants even dimensions; keep them sane.
-            self.width = max(1024, min(7680, width & ~1))
-            self.height = max(768, min(4320, height & ~1))
+        public init(width: Int, height: Int, scalePercent: Int, performance: Bool = false) {
+            // virtio-win's GPU driver rejects modes whose width isn't a multiple of 16
+            // (ChangeDisplaySettings returns DISP_CHANGE_BADMODE), so round down; the few
+            // pixels lost don't change the aspect ratio visibly.
+            let aligned = max(1024, min(7680, width & ~15))
+            // Shrink the height by the same factor so the picture keeps the screen's shape
+            // (otherwise rounding 1512 to 1504 leaves a thin bar in full screen).
+            let scaled = aligned < width ? Int((Double(height) * Double(aligned) / Double(width)).rounded()) : height
+            self.width = aligned
+            self.height = max(768, min(4320, scaled & ~1))
             self.scalePercent = scalePercent
+            self.performance = performance
         }
 
         public static let fallback = Display(width: 1920, height: 1200, scalePercent: 100)
@@ -35,7 +45,7 @@ public enum BurrowTools {
 
         try windows(agentScript).write(to: staging.appendingPathComponent("burrow-agent.ps1"), atomically: true, encoding: .utf8)
         try windows(installScript).write(to: staging.appendingPathComponent("burrow-install.cmd"), atomically: true, encoding: .utf8)
-        try "\(display.width) \(display.height) \(display.scalePercent)\r\n"
+        try "\(display.width) \(display.height) \(display.scalePercent) \(display.performance ? 1 : 0)\r\n"
             .write(to: staging.appendingPathComponent("burrow-display.txt"), atomically: true, encoding: .utf8)
 
         try? fm.removeItem(at: destination)
@@ -72,6 +82,17 @@ public enum BurrowTools {
     static let agentScript = #"""
     # Burrow Tools: sets this display to the resolution and scaling Burrow chose for the Mac.
     $ErrorActionPreference = 'SilentlyContinue'
+
+    # Keep the installed copy current: when the Burrow Tools disc carries a different version,
+    # take it and run that instead.
+    $self = $MyInvocation.MyCommand.Path
+    $newer = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'burrow-agent.ps1' } |
+        Where-Object { $_ -ne $self -and (Test-Path $_) } | Select-Object -First 1
+    if ($self -and $newer -and (Get-FileHash $newer).Hash -ne (Get-FileHash $self).Hash) {
+        Copy-Item $newer $self -Force
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $self
+        exit 0
+    }
     Add-Type -TypeDefinition @'
     using System;
     using System.Runtime.InteropServices;
@@ -92,6 +113,20 @@ public enum BurrowTools {
         [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint paths, byte[] pathInfo, ref uint modes, byte[] modeInfo, IntPtr topology);
         [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(byte[] packet);
         [DllImport("user32.dll")] static extern int DisplayConfigSetDeviceInfo(byte[] packet);
+        [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, IntPtr value, uint flags);
+
+        // Animations and shadows Windows draws on every window, menu and list; with no GPU
+        // acceleration each one costs CPU time. 3 = SPIF_UPDATEINIFILE | SPIF_SENDCHANGE.
+        static readonly uint[] Effects = { 0x1043, 0x1003, 0x1005, 0x1007, 0x1013, 0x1015, 0x1017, 0x101B, 0x1025 };
+
+        public static void SetEffects(bool on) {
+            foreach (var action in Effects) SystemParametersInfo(action, 0, new IntPtr(on ? 1 : 0), 3);
+            // Minimize and maximize animation: SPI_SETANIMATION takes an ANIMATIONINFO.
+            IntPtr info = Marshal.AllocHGlobal(8);
+            Marshal.WriteInt32(info, 0, 8); Marshal.WriteInt32(info, 4, on ? 1 : 0);
+            SystemParametersInfo(0x0049, 8, info, 3);
+            Marshal.FreeHGlobal(info);
+        }
 
         public static string Current() {
             var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(dm);
@@ -135,6 +170,24 @@ public enum BurrowTools {
     $log = Join-Path $env:LOCALAPPDATA 'Burrow\burrow-agent.log'
     function Log($text) { Add-Content -Path $log -Value ("{0:s} {1}" -f (Get-Date), $text) }
 
+    # Performance mode turns Windows' visual effects off; leaving it restores what Burrow changed.
+    function Set-Performance([bool]$on) {
+        $marker = 'HKCU:\Software\Burrow'
+        $applied = (Get-ItemProperty -Path $marker -Name PerformanceTweaks).PerformanceTweaks -eq 1
+        if (-not $on -and -not $applied) { return }
+        $personalize = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+        $effects = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+        [BurrowDisplay]::SetEffects(-not $on)
+        New-Item -Path $effects -Force | Out-Null
+        # 3 = custom: only the effects above go off; font smoothing (ClearType) stays on.
+        Set-ItemProperty -Path $effects -Name VisualFXSetting -Type DWord -Value $(if ($on) { 3 } else { 0 })
+        Set-ItemProperty -Path $personalize -Name EnableTransparency -Type DWord -Value $(if ($on) { 0 } else { 1 })
+        powercfg.exe /setactive $(if ($on) { 'SCHEME_MIN' } else { 'SCHEME_BALANCED' }) | Out-Null
+        New-Item -Path $marker -Force | Out-Null
+        Set-ItemProperty -Path $marker -Name PerformanceTweaks -Type DWord -Value $(if ($on) { 1 } else { 0 })
+        Log "performance tweaks $(if ($on) { 'on' } else { 'off' })"
+    }
+
     # The display card's driver can load a little after sign-in; retry for a while.
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         $file = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'burrow-display.txt' } |
@@ -142,9 +195,11 @@ public enum BurrowTools {
         if ($file) {
             $parts = (Get-Content $file -TotalCount 1).Trim() -split '\s+'
             $width = [int]$parts[0]; $height = [int]$parts[1]; $scale = [int]$parts[2]
+            $performance = $parts.Count -gt 3 -and $parts[3] -eq '1'
             $result = [BurrowDisplay]::SetResolution($width, $height)
             if ($result -eq 0 -and [BurrowDisplay]::Current() -eq "$($width)x$($height)") {
                 $scaled = [BurrowDisplay]::SetScale($scale)
+                Set-Performance $performance
                 Log "display ${width}x${height} at ${scale}% (scale result $scaled)"
                 exit 0
             }
