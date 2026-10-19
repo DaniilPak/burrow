@@ -1,4 +1,6 @@
 import AppKit
+import IOSurface
+import QuartzCore
 import BurrowCore
 import SwiftUI
 
@@ -26,17 +28,32 @@ struct QEMUDisplay: NSViewRepresentable {
 final class QEMUScreenView: NSView {
     private var client: VNCClient?
     private var socketPath: String?
-    private var image: CGImage?
     private var framebufferSize = CGSize(width: 1024, height: 768)
     private var buttons: UInt8 = 0
     private var tracking: NSTrackingArea?
-    /// Shown over the screen. Windows' own pointer is either drawn into the picture (basic
-    /// framebuffer) or sent as a shape (GPU); either way the Mac's arrow must not show too.
-    private var guestCursor: NSCursor = QEMUScreenView.invisibleCursor
-    private var cursorShape: VNCClient.CursorShape?
     private var sizedWindow = false
+    /// Shows the guest's framebuffer. Its contents are an IOSurface the VNC thread writes
+    /// changed rectangles into; Core Animation scales and composites it on the GPU.
+    private let screenLayer = CALayer()
+    private var surface: IOSurface?
+    private var frameScheduled = false
+    private let frameLock = NSLock()
 
-    static let invisibleCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        layer?.backgroundColor = NSColor.black.cgColor
+        screenLayer.contentsGravity = .resize
+        screenLayer.magnificationFilter = .linear
+        screenLayer.minificationFilter = .trilinear
+        screenLayer.isOpaque = true
+        layer?.addSublayer(screenLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -47,20 +64,15 @@ final class QEMUScreenView: NSView {
         disconnect()
         socketPath = path
         let client = VNCClient(path: path)
-        client.onFrame = { [weak self] image, size in
+        client.onFrame = { [weak self] surface in
+            // Coalesce: at most one pending main-thread update, however fast frames arrive.
+            guard let self, self.frameLock.withLock({ () -> Bool in
+                defer { self.frameScheduled = true }
+                return !self.frameScheduled
+            }) else { return }
             DispatchQueue.main.async {
-                guard let self else { return }
-                let resized = self.framebufferSize != size
-                self.image = image
-                self.framebufferSize = size
-                self.needsDisplay = true
-                if resized || !self.sizedWindow { self.fitWindow() }
-            }
-        }
-        client.onCursor = { [weak self] shape in
-            DispatchQueue.main.async {
-                self?.cursorShape = shape
-                self?.updateCursor()
+                self.frameLock.withLock { self.frameScheduled = false }
+                self.show(surface)
             }
         }
         self.client = client
@@ -140,30 +152,40 @@ final class QEMUScreenView: NSView {
         window?.toolbar?.isVisible = true
     }
 
-    private func updateCursor() {
-        if let shape = cursorShape, shape.width > 0, shape.height > 0 {
-            // Guest pixels → points at the current zoom, so the pointer matches what you see.
-            let zoom = screenRect.width / max(1, framebufferSize.width)
-            let image = NSImage(size: NSSize(width: CGFloat(shape.width) * zoom, height: CGFloat(shape.height) * zoom))
-            image.addRepresentation(NSBitmapImageRep(cgImage: shape.image))
-            guestCursor = NSCursor(image: image, hotSpot: NSPoint(x: CGFloat(shape.hotX) * zoom, y: CGFloat(shape.hotY) * zoom))
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        screenLayer.frame = screenRect
+        CATransaction.commit()
+    }
+
+    private func show(_ surface: IOSurface) {
+        let size = CGSize(width: surface.width, height: surface.height)
+        let resized = framebufferSize != size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if surface !== self.surface {
+            self.surface = surface
+            screenLayer.contents = surface
         } else {
-            guestCursor = Self.invisibleCursor
+            // Same surface, new pixels: tell Core Animation to re-read it. -setContentsChanged
+            // isn't in the public headers; reassigning the contents is the fallback.
+            let changed = Selector(("setContentsChanged"))
+            if screenLayer.responds(to: changed) {
+                screenLayer.perform(changed)
+            } else {
+                screenLayer.contents = nil
+                screenLayer.contents = surface
+            }
         }
-        window?.invalidateCursorRects(for: self)
-        if let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) { guestCursor.set() }
+        if resized {
+            framebufferSize = size
+            screenLayer.frame = screenRect
+        }
+        CATransaction.commit()
+        if resized || !sizedWindow { fitWindow() }
     }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: guestCursor)
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        updateCursor()
-    }
-
-    // MARK: Drawing
 
     /// The framebuffer scaled to fit, centered, keeping its aspect ratio.
     private var screenRect: CGRect {
@@ -171,20 +193,6 @@ final class QEMUScreenView: NSView {
         let size = CGSize(width: framebufferSize.width * scale, height: framebufferSize.height * scale)
         return CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
                       width: size.width, height: size.height)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.setFill()
-        bounds.fill()
-        guard let image, let context = NSGraphicsContext.current?.cgContext else { return }
-        let rect = screenRect
-        context.saveGState()
-        // CGImage draws bottom-up; flip back since this view is flipped.
-        context.translateBy(x: 0, y: rect.maxY + rect.minY)
-        context.scaleBy(x: 1, y: -1)
-        context.interpolationQuality = .high
-        context.draw(image, in: rect)
-        context.restoreGState()
     }
 
     // MARK: Mouse
@@ -366,17 +374,11 @@ final class VNCClient: @unchecked Sendable {
     private var stopped = false
     private var width = 0
     private var height = 0
-    private var pixels: [UInt8] = []
+    /// The guest screen, shared with Core Animation; changed rectangles are read into it in place.
+    private var surface: IOSurface?
 
-    /// Called on the reader thread with each finished frame.
-    var onFrame: ((CGImage, CGSize) -> Void)?
-
-    struct CursorShape {
-        let image: CGImage
-        let width: Int, height: Int, hotX: Int, hotY: Int
-    }
-    /// Called on the reader thread when the guest's pointer shape changes (nil: hidden).
-    var onCursor: ((CursorShape?) -> Void)?
+    /// Called on the reader thread after each update has been written into the surface.
+    var onFrame: ((IOSurface) -> Void)?
 
     init(path: String) { self.path = path }
 
@@ -437,8 +439,10 @@ final class VNCClient: @unchecked Sendable {
             switch type {
             case 0:
                 guard readFramebufferUpdate() else { return }
-                if let image = makeImage() { onFrame?(image, CGSize(width: width, height: height)) }
+                // Ask for the next update before handing this one over, so QEMU can prepare it
+                // while the frame is on screen.
                 requestUpdate(incremental: true)
+                if let surface { onFrame?(surface) }
             case 1: // SetColourMapEntries: unused with true colour, but skip it cleanly.
                 guard let header = readBytes(5) else { return }
                 let count = Int(u16(header, 3))
@@ -465,7 +469,7 @@ final class VNCClient: @unchecked Sendable {
         width = Int(u16(serverInit, 0))
         height = Int(u16(serverInit, 2))
         guard readBytes(Int(u32(serverInit, 20))) != nil else { return false }
-        pixels = [UInt8](repeating: 0, count: width * height * 4)
+        makeSurface()
 
         // 32 bpp, depth 24, little endian, true colour; red at bit 16 makes BGRX bytes.
         var format = Data([0, 0, 0, 0, 32, 24, 0, 1])
@@ -489,6 +493,15 @@ final class VNCClient: @unchecked Sendable {
         send(message)
     }
 
+    private func makeSurface() {
+        guard width > 0, height > 0 else { return }
+        surface = IOSurface(properties: [
+            .width: width, .height: height,
+            .bytesPerElement: 4, .bytesPerRow: width * 4,
+            .pixelFormat: 0x4247_5241, // 'BGRA'
+        ])
+    }
+
     private func readFramebufferUpdate() -> Bool {
         guard let header = readBytes(3) else { return false }
         let rects = Int(u16(header, 1))
@@ -499,22 +512,11 @@ final class VNCClient: @unchecked Sendable {
             let encoding = Int32(bitPattern: u32(rect, 8))
             switch encoding {
             case 0:
-                let rowBytes = w * 4
-                var row = [UInt8](repeating: 0, count: rowBytes)
-                for line in 0..<h {
-                    guard row.withUnsafeMutableBytes({ UnixSocket.read(fd, into: $0.baseAddress!, count: rowBytes) }) else { return false }
-                    let target = y + line
-                    guard target < height, x + w <= width else { continue }
-                    let start = (target * width + x) * 4
-                    pixels.replaceSubrange(start..<start + rowBytes, with: row)
-                }
+                guard readRaw(x: x, y: y, w: w, h: h) else { return false }
             case -223:
                 width = w
                 height = h
-                pixels = [UInt8](repeating: 0, count: w * h * 4)
-            case -239:
-                guard let colors = readBytes(w * h * 4), let mask = readBytes((w + 7) / 8 * h) else { return false }
-                onCursor?(makeCursor(colors: colors, mask: mask, width: w, height: h, hotX: x, hotY: y))
+                makeSurface()
             default:
                 return false
             }
@@ -522,42 +524,29 @@ final class VNCClient: @unchecked Sendable {
         return true
     }
 
-    /// Rich-cursor pixels arrive in the client pixel format (BGRX) plus a 1-bit opacity mask.
-    private func makeCursor(colors: [UInt8], mask: [UInt8], width w: Int, height h: Int, hotX: Int, hotY: Int) -> CursorShape? {
-        guard w > 0, h > 0 else { return nil }
-        var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        let maskRow = (w + 7) / 8
-        var visible = false
-        for row in 0..<h {
-            for column in 0..<w {
-                let opaque = mask[row * maskRow + column / 8] & (0x80 >> UInt8(column % 8)) != 0
-                guard opaque else { continue }
-                visible = true
-                let source = (row * w + column) * 4, target = source
-                rgba[target] = colors[source + 2]
-                rgba[target + 1] = colors[source + 1]
-                rgba[target + 2] = colors[source]
-                rgba[target + 3] = 255
+    /// Reads a raw rectangle straight into the surface, row by row, with no extra copies.
+    private func readRaw(x: Int, y: Int, w: Int, h: Int) -> Bool {
+        let rowBytes = w * 4
+        guard let surface, x + w <= width, y + h <= height else {
+            // Out of bounds (a resize raced the update): consume and drop it.
+            var scratch = [UInt8](repeating: 0, count: rowBytes)
+            for _ in 0..<h {
+                guard scratch.withUnsafeMutableBytes({ UnixSocket.read(fd, into: $0.baseAddress!, count: rowBytes) }) else { return false }
             }
+            return true
         }
-        guard visible, let provider = CGDataProvider(data: Data(rgba) as CFData),
-              let image = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-                                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-        else { return nil }
-        return CursorShape(image: image, width: w, height: h, hotX: hotX, hotY: hotY)
-    }
-
-    private func makeImage() -> CGImage? {
-        guard width > 0, height > 0 else { return nil }
-        let data = Data(pixels) as CFData
-        guard let provider = CGDataProvider(data: data) else { return nil }
-        return CGImage(
-            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        surface.lock(options: [], seed: nil)
+        defer { surface.unlock(options: [], seed: nil) }
+        let base = surface.baseAddress
+        let stride = surface.bytesPerRow
+        for line in 0..<h {
+            let row = base + (y + line) * stride + x * 4
+            guard UnixSocket.read(fd, into: row, count: rowBytes) else { return false }
+            // The padding byte arrives as 0; make it opaque alpha for Core Animation.
+            let pixels = row.bindMemory(to: UInt32.self, capacity: w)
+            for index in 0..<w { pixels[index] |= 0xFF00_0000 }
+        }
+        return true
     }
 
     // MARK: Bytes
