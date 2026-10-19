@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an idea or a guest you'd like supported
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Burrow to do?
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - "Yes, I'd like to open a PR"
+        - Maybe, with some guidance
+        - "No"

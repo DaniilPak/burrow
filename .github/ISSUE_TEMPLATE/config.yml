@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/DaniilPak/burrow/discussions
+    about: Ask questions and share what you're running in Burrow.
+  - name: Security vulnerability
+    url: https://github.com/DaniilPak/burrow/security/advisories/new
+    about: Report security problems privately.

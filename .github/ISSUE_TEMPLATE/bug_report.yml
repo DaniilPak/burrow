@@ -1,0 +1,44 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Click + and choose Ubuntu desktop
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: guest
+    attributes:
+      label: Guest OS
+      placeholder: Ubuntu 24.04 desktop / Windows 11 24H2 / macOS 15
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Mac model and macOS version
+      placeholder: MacBook Air M2, macOS 15.1
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Burrow version or commit
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: For a guest that won't boot, paste the end of `console.log` from the machine's `.burrow` folder.
+      render: text
