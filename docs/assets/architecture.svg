@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="880" height="420" rx="16" fill="#ffffff"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7781"/>
+    </marker>
+  </defs>
+
+  <!-- Front ends -->
+  <rect x="150" y="28" width="250" height="64" rx="12" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="275" y="56" text-anchor="middle" font-size="17" font-weight="600" fill="#0a3069">Burrow.app</text>
+  <text x="275" y="77" text-anchor="middle" font-size="13" fill="#0a3069">SwiftUI library &amp; machine windows</text>
+
+  <rect x="480" y="28" width="250" height="64" rx="12" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="605" y="56" text-anchor="middle" font-size="17" font-weight="600" fill="#0a3069">burrowctl</text>
+  <text x="605" y="77" text-anchor="middle" font-size="13" fill="#0a3069">headless CLI for scripts &amp; servers</text>
+
+  <line x1="275" y1="92" x2="380" y2="134" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="605" y1="92" x2="500" y2="134" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Core -->
+  <rect x="110" y="136" width="660" height="100" rx="12" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+  <text x="440" y="164" text-anchor="middle" font-size="17" font-weight="600" fill="#4d2d00">BurrowCore</text>
+  <text x="440" y="190" text-anchor="middle" font-size="13" fill="#4d2d00">Image catalog &amp; verified downloads · machine bundles · ASIF / sparse disks</text>
+  <text x="440" y="212" text-anchor="middle" font-size="13" fill="#4d2d00">APFS clones &amp; snapshots · suspend / resume · unattended Windows setup media</text>
+
+  <line x1="300" y1="236" x2="250" y2="278" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="580" y1="236" x2="630" y2="278" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Engines -->
+  <rect x="60" y="280" width="360" height="110" rx="12" fill="#dafbe1" stroke="#1a7f37" stroke-width="1.5"/>
+  <text x="240" y="310" text-anchor="middle" font-size="17" font-weight="600" fill="#044f1e">Virtualization.framework</text>
+  <text x="240" y="336" text-anchor="middle" font-size="13" fill="#044f1e">Linux &amp; macOS guests</text>
+  <text x="240" y="358" text-anchor="middle" font-size="13" fill="#044f1e">virtio-fs shares · Rosetta · SPICE clipboard</text>
+
+  <rect x="460" y="280" width="360" height="110" rx="12" fill="#fbefff" stroke="#8250df" stroke-width="1.5"/>
+  <text x="640" y="310" text-anchor="middle" font-size="17" font-weight="600" fill="#3e1f79">QEMU + Hypervisor.framework</text>
+  <text x="640" y="336" text-anchor="middle" font-size="13" fill="#3e1f79">Windows 11 on ARM guests</text>
+  <text x="640" y="358" text-anchor="middle" font-size="13" fill="#3e1f79">UEFI · NVMe · VNC into Burrow's window</text>
+</svg>
