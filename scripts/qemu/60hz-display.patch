@@ -1,0 +1,49 @@
+Burrow: refresh the display at 60 Hz and react at once when the guest draws.
+
+QEMU polls the guest framebuffer every 30 ms (33 fps) and, after a quiet spell,
+backs off by 50 ms per idle tick up to 3 s, halving again only one tick at a
+time once drawing resumes. Poll every 16 ms, return to that rate on the first
+change, and cap the backoff at 100 ms while a viewer is connected.
+--- a/include/ui/console.h
++++ b/include/ui/console.h
+@@ -36,7 +36,7 @@
+ #define QEMU_CAPS_LOCK_LED   (1 << 2)
+ 
+ /* in ms */
+-#define GUI_REFRESH_INTERVAL_DEFAULT    30
++#define GUI_REFRESH_INTERVAL_DEFAULT    16
+ #define GUI_REFRESH_INTERVAL_IDLE     3000
+ 
+ /* Color number is match to standard vga palette */
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -59,7 +59,9 @@
+ #include "monitor/monitor.h"
+ 
+ #define VNC_REFRESH_INTERVAL_BASE GUI_REFRESH_INTERVAL_DEFAULT
+-#define VNC_REFRESH_INTERVAL_INC  50
++#define VNC_REFRESH_INTERVAL_INC  16
++/* Longest wait between polls while a viewer is connected. */
++#define VNC_REFRESH_INTERVAL_IDLE 100
+ #define VNC_REFRESH_INTERVAL_MAX  GUI_REFRESH_INTERVAL_IDLE
+ static const struct timeval VNC_REFRESH_STATS = { 0, 500000 };
+ static const struct timeval VNC_REFRESH_LOSSY = { 2, 0 };
+@@ -3272,14 +3274,12 @@
+     }
+ 
+     if (has_dirty && rects) {
+-        vd->dcl.update_interval /= 2;
+-        if (vd->dcl.update_interval < VNC_REFRESH_INTERVAL_BASE) {
+-            vd->dcl.update_interval = VNC_REFRESH_INTERVAL_BASE;
+-        }
++        /* The guest is drawing: poll at the full rate straight away. */
++        vd->dcl.update_interval = VNC_REFRESH_INTERVAL_BASE;
+     } else {
+         vd->dcl.update_interval += VNC_REFRESH_INTERVAL_INC;
+-        if (vd->dcl.update_interval > VNC_REFRESH_INTERVAL_MAX) {
+-            vd->dcl.update_interval = VNC_REFRESH_INTERVAL_MAX;
++        if (vd->dcl.update_interval > VNC_REFRESH_INTERVAL_IDLE) {
++            vd->dcl.update_interval = VNC_REFRESH_INTERVAL_IDLE;
+         }
+     }
+ }

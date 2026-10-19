@@ -385,6 +385,7 @@ final class VNCClient: @unchecked Sendable {
     func start() {
         let thread = Thread { [weak self] in self?.run() }
         thread.name = "Burrow VNC"
+        thread.qualityOfService = .userInteractive
         thread.start()
     }
 

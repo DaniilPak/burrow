@@ -71,6 +71,15 @@ Click **+**, pick Linux, Windows or macOS, and click **Download & Create** (or
 **Continue…** for Windows). Progress shows in the sidebar, and the machine starts its
 installer when the download is done.
 
+Windows runs on QEMU. `brew install qemu` is enough, but for a 60 fps display build
+Burrow's patched QEMU once (stock QEMU refreshes the screen every 30 ms); Burrow then
+prefers it automatically:
+
+```bash
+brew install qemu meson ninja
+./scripts/build-qemu.sh         # → ~/Library/Application Support/Burrow/QEMU
+```
+
 Binaries are ad-hoc signed with the `com.apple.security.virtualization` entitlement.
 Set `SIGN_IDENTITY` to sign with a Developer ID instead.
 

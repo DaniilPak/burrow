@@ -12,8 +12,16 @@ public final class QEMUMachine: @unchecked Sendable {
         case exited(guestShutdown: Bool, error: String?)
     }
 
-    /// Homebrew installs QEMU here on Apple silicon.
-    static let prefixes = ["/opt/homebrew", "/usr/local"]
+    /// Burrow's own QEMU (scripts/build-qemu.sh: 60 Hz display refresh) comes first; Homebrew's
+    /// stock build is the fallback.
+    static var prefixes: [String] {
+        [burrowQEMUURL.path, "/opt/homebrew", "/usr/local"]
+    }
+
+    /// Where scripts/build-qemu.sh installs Burrow's QEMU: beside Machines and Images.
+    public static var burrowQEMUURL: URL {
+        MachineLibrary.defaultRoot.deletingLastPathComponent().appendingPathComponent("QEMU", isDirectory: true)
+    }
 
     public static var executableURL: URL? {
         prefixes.map { URL(fileURLWithPath: "\($0)/bin/qemu-system-aarch64") }
@@ -166,6 +174,9 @@ public final class QEMUMachine: @unchecked Sendable {
 
         process.executableURL = qemu
         process.arguments = arguments
+        // Windows' virtual CPUs are the work you're waiting on; at the default QoS macOS may
+        // park them on efficiency cores.
+        process.qualityOfService = .userInteractive
         process.currentDirectoryURL = bundle.url
         process.standardOutput = FileHandle.nullDevice
         let errors = Pipe()
