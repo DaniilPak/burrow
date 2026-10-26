@@ -302,11 +302,13 @@ public final class MachineSession: NSObject, ObservableObject {
                     }
                 }
             }
-            // Answer "Press any key to boot from CD or DVD" so Setup starts by itself.
-            Task { [weak self] in
-                let deadline = Date().addingTimeInterval(30)
-                while Date() < deadline {
-                    guard let self, self.qemuMachine === machine, self.status == .running else { return }
+            // Answer "Press any key to boot from CD or DVD" so Setup starts by itself, and stop
+            // as soon as Setup's coloured background replaces the black firmware screen: later
+            // presses would land on Setup's window (Space opens its Support link and stalls it).
+            Task.detached {
+                let deadline = Date().addingTimeInterval(90)
+                while Date() < deadline, machine.isRunning {
+                    if let color = machine.screenCornerColor(), max(color.red, color.green, color.blue) > 24 { return }
                     machine.press("spc")
                     try? await Task.sleep(for: .milliseconds(500))
                 }

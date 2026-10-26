@@ -138,7 +138,10 @@ public final class QEMUMachine: @unchecked Sendable {
             "-drive", "if=pflash,format=raw,readonly=on,file=\(escape(firmware.appendingPathComponent("edk2-aarch64-code.fd").path))",
             "-drive", "if=pflash,format=raw,file=\(escape(vars.path))",
             "-device", graphics,
-            "-device", "qemu-xhci,id=xhci",
+            // QEMU's xHCI has 4 USB 2 ports by default. Keyboard, tablet, audio and four discs
+            // overflow them, and the firmware then misses the keyboard at the "Press any key to
+            // boot from CD" prompt, so the installer never starts.
+            "-device", "qemu-xhci,id=xhci,p2=15,p3=15",
             "-device", "usb-kbd", "-device", "usb-tablet",
             // Windows has a class driver for USB audio, so sound works without extra drivers.
             "-audiodev", "coreaudio,id=snd0",
@@ -219,6 +222,34 @@ public final class QEMUMachine: @unchecked Sendable {
     public func restart() throws { try qmp?.execute("system_reset") }
 
     /// Taps a key, e.g. "spc" to answer "Press any key to boot from CD or DVD".
+    /// The colour of the guest screen's bottom-left pixel, read with a QMP screendump.
+    /// Setup is told apart from the firmware and boot prompt (black) by its coloured background.
+    public func screenCornerColor() -> (red: UInt8, green: UInt8, blue: UInt8)? {
+        let file = runDirectory.appendingPathComponent("screen.ppm")
+        guard (try? qmp?.execute("screendump", ["filename": file.path])) != nil,
+              let data = try? Data(contentsOf: file)
+        else { return nil }
+        // Binary PPM: "P6\n<width> <height>\n255\n" then RGB triples.
+        var fields: [Int] = []
+        var index = data.startIndex
+        var token = ""
+        while fields.count < 4, index < data.endIndex {
+            let byte = data[index]
+            index += 1
+            if byte == 0x0A || byte == 0x20 {
+                if token.hasPrefix("P") { token = "" } else if let value = Int(token) { fields.append(value); token = "" }
+                if fields.count == 3 { break }
+            } else {
+                token.append(Character(UnicodeScalar(byte)))
+            }
+        }
+        guard fields.count == 3 else { return nil }
+        let (width, height) = (fields[0], fields[1])
+        let offset = index + ((height - 3) * width + 3) * 3
+        guard width > 3, height > 3, offset + 2 < data.endIndex else { return nil }
+        return (data[offset], data[offset + 1], data[offset + 2])
+    }
+
     public func press(_ qcode: String) {
         _ = try? qmp?.execute("send-key", ["keys": [["type": "qcode", "data": qcode]]])
     }
